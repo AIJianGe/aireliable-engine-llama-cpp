@@ -1,0 +1,212 @@
+engine_id: llama_cpp_9cdb76f8
+engine_name: Llama.cpp
+engine_version: 0.2.1
+aireliable_compat: '>=0.0.16'
+uv_env_name: llm-llama-cpp
+export_mode: source
+description: 通用 GGUF 模型运行引擎（Qwen 系列等）
+engine_uid: aireliable://llama/llm/llama_cpp
+paradigm: integrated
+sdk_version: '>=0.3.0'
+author:
+  name: AI剑歌
+# 第三方开源引用（MIT，可再分发）
+third_party_references:
+  - name: llama.cpp
+    author: Georgi Gerganov (ggerganov)
+    github: https://github.com/ggerganov/llama.cpp
+    license: MIT
+    description: 引擎核心 GGUF 推理能力来自 llama.cpp，提供 llama-server / llama-cli 二进制与 router 模式按需加载
+source:
+  type: github
+  github_repo: ggerganov/llama.cpp
+upgrade:
+  check_url: https://api.github.com/repos/ggerganov/llama.cpp/releases/latest
+  auto_check: false
+node_packages: []
+env_config:
+  requires_torch: false
+  default_cuda_version: cu128
+  requires_python: '>=3.10,<3.13'
+  # v0.3.6+ 声明支持设备策略显存降级：显存预检失败时平台可自动降级为
+  # gpu+cpu 混合模式启动（llama-server -ngl auto --fit on 按实际显存自动
+  # 分配 GPU/CPU 层数）。未声明此字段的引擎维持硬门禁（显存不足直接报错）
+  # 详见 ANALYSIS-TASKS/LLAMACPP_VRAM_STARTUP_FAILURE_ANALYSIS.md 方案 A
+  supports_device_policy: true
+  notes: Llama.cpp 是 C++ 二进制包装层，不依赖 torch。GPU 层数由 llama-server 的 -ngl 参数控制。
+models:
+  model_layout:
+    base: llm/checkpoints/llama/
+    lora: llm/loras/llama/
+  variants:
+  - name: qwen3.6-35b-a3b-q6-k            # 长度 31 ≤ 32，原名可直接用；保留别名方便记忆
+    alias:
+      - qwen3.6-q6                         # 原名 alias（向后兼容）
+      - qwen-q6                             # 8 字符，短
+    base_model: qwen3.6-35b-a3b
+    precision: q6_k
+    loader: gguf
+    # v1.0 修正（LLAMA_CPP_UV_WINERROR2）：原 48GB 与卡总容量相等，
+    # 启动预检永远不通过。llama-server 为 router 模式按需加载，
+    # 实际推理峰值 = 权重 30.9GB + q4_0 KV cache + mmproj + 缓冲 ≈ 40GB。
+    vram_required: 40GB
+    path: llm/checkpoints/llama/Qwen_Qwen3.6-35B-A3B-Q6_K.gguf
+    model_file_ids:
+    - qwen3.6-35b-a3b-q6-k-gguf
+    - mmproj-qwen3.6-35b-a3b-f16-gguf
+    supports_mmproj: true
+    uv_env: envs/llm-llama-cpp
+    ctx:
+      recommended: 16384
+      min: 4096
+      max: 262144
+  # ── 注意：variant.name 长度 35 > 32，有 32 位输入限制的工具必须使用下方任意 alias ──
+  - name: qwen3.6-35b-a3b-uncensored-q6-k-p
+    alias:
+      - qwen3.6-unc-q6                      # 原名 alias（向后兼容，13 字符）
+      - qwen3.6-unc                         # 10 字符
+      - qwen-unc                             #  8 字符（推荐，OpenAI SDK 等 32 位限制场景下直接用）
+      - 3.6-unc                              #  7 字符（超短）
+      - unc-q6                               #  6 字符（最短）
+    base_model: qwen3.6-35b-a3b-uncensored
+    precision: q6_k_p
+    loader: gguf
+    # 同上：router 模式按需加载，48GB 声明导致启动预检永不通过
+    vram_required: 40GB
+    path: llm/checkpoints/llama/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+    model_file_ids:
+    - qwen3.6-35b-a3b-uncensored-q6-k-p-gguf
+    - mmproj-qwen3.6-35b-a3b-uncensored-f16-gguf
+    supports_mmproj: true
+    uv_env: envs/llm-llama-cpp
+    ctx:
+      recommended: 16384
+      min: 4096
+      max: 262144
+  # ── Qwen3.8-27B 系列（bartowski 公开 GGUF，免 token）──
+  - name: qwen3.8-27b-q6-k-l
+    alias:
+      - qwen3.8-q6                          # 原名 alias（10 字符）
+      - qwen38-q6                           # 8 字符
+      - 3.8-q6                              # 7 字符（最短）
+    base_model: qwen3.8-27b
+    precision: q6_k_l
+    loader: gguf
+    # Q6_K_L 24.08GB + ctx + mmproj + 缓冲 ≈ 32GB；device_policy 降级 40GB 卡可跑
+    vram_required: 40GB
+    path: llm/checkpoints/llama/Qwen3.8-27B-Q6_K_L.gguf
+    model_file_ids:
+    - qwen3.8-27b-q6-k-l-gguf
+    - mmproj-qwen3.8-27b-f16-gguf
+    supports_mmproj: true
+    uv_env: envs/llm-llama-cpp
+    ctx:
+      recommended: 16384
+      min: 4096
+      max: 262144
+  model_files:
+  - id: qwen3.6-35b-a3b-q6-k-gguf
+    role: main
+    filename: Qwen_Qwen3.6-35B-A3B-Q6_K.gguf
+    target_dir: llm/checkpoints/llama/
+    size_bytes: 30947309184
+    precision: q6_k
+    format: gguf
+    exclusive_group: llama-gguf
+    required_for:
+    - qwen3.6-35b-a3b-q6-k
+    source:
+      type: huggingface
+      repo_id: Qwen/Qwen3.6-35B-A3B-GGUF
+      filename: Qwen3.6-35B-A3B-Q6_K.gguf
+      url: https://huggingface.co/Qwen/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-Q6_K.gguf
+      mirror_url: https://hf-mirror.com/Qwen/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-Q6_K.gguf
+    description: Qwen3.6-35B-A3B Q6_K 量化（约 35GB，MoE 35B/A3B）
+  - id: qwen3.6-35b-a3b-uncensored-q6-k-p-gguf
+    role: main
+    filename: Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+    target_dir: llm/checkpoints/llama/
+    size_bytes: 30649317504
+    precision: q6_k_p
+    format: gguf
+    exclusive_group: llama-gguf
+    required_for:
+    - qwen3.6-35b-a3b-uncensored-q6-k-p
+    source:
+      type: huggingface
+      repo_id: HauhauCS/Qwen3.6-35B-A3B-Uncensored-GGUF
+      filename: Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+      url: https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-GGUF/resolve/main/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+      mirror_url: https://hf-mirror.com/HauhauCS/Qwen3.6-35B-A3B-Uncensored-GGUF/resolve/main/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+    description: Qwen3.6-35B-A3B Uncensored Q6_K_P 量化（约 35GB，无审查版）
+  - id: mmproj-qwen3.6-35b-a3b-f16-gguf
+    role: mmproj
+    filename: mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf
+    target_dir: llm/checkpoints/llama/
+    size_bytes: 700000000
+    precision: fp16
+    format: gguf
+    exclusive_group: llama-mmproj
+    required_for:
+    - qwen3.6-35b-a3b-q6-k
+    source:
+      type: huggingface
+      repo_id: Qwen/Qwen3.6-35B-A3B-GGUF
+      filename: mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf
+      url: https://huggingface.co/Qwen/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf
+      mirror_url: https://hf-mirror.com/Qwen/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf
+    description: Qwen3.6-35B-A3B 多模态投影 f16（约 0.7GB，q6-k / q8-0 共享）
+  - id: mmproj-qwen3.6-35b-a3b-uncensored-f16-gguf
+    role: mmproj
+    filename: mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf
+    target_dir: llm/checkpoints/llama/
+    size_bytes: 700000000
+    precision: fp16
+    format: gguf
+    exclusive_group: llama-mmproj
+    required_for:
+    - qwen3.6-35b-a3b-uncensored-q6-k-p
+    source:
+      type: huggingface
+      repo_id: HauhauCS/Qwen3.6-35B-A3B-Uncensored-GGUF
+      filename: mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf
+      url: https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-GGUF/resolve/main/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf
+      mirror_url: https://hf-mirror.com/HauhauCS/Qwen3.6-35B-A3B-Uncensored-GGUF/resolve/main/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf
+    description: Qwen3.6-35B-A3B Uncensored 多模态投影 f16（约 0.7GB，q6-k-p / q8-k-p 共享）
+  # ── Qwen3.8-27B（bartowski 公开仓库，免 token）──
+  - id: qwen3.8-27b-q6-k-l-gguf
+    role: main
+    filename: Qwen3.8-27B-Q6_K_L.gguf
+    target_dir: llm/checkpoints/llama/
+    size_bytes: 24080000000
+    precision: q6_k_l
+    format: gguf
+    exclusive_group: llama-gguf
+    required_for:
+    - qwen3.8-27b-q6-k-l
+    source:
+      type: huggingface
+      repo_id: bartowski/Qwen3.8-27B-GGUF
+      filename: Qwen3.8-27B-Q6_K_L.gguf
+      url: https://huggingface.co/bartowski/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q6_K_L.gguf
+      mirror_url: https://hf-mirror.com/bartowski/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q6_K_L.gguf
+    description: Qwen3.8-27B Q6_K_L 量化（约 24GB，bartowski 公开仓库免 token）
+  - id: mmproj-qwen3.8-27b-f16-gguf
+    role: mmproj
+    filename: mmproj-Qwen3.8-27B-f16.gguf
+    target_dir: llm/checkpoints/llama/
+    size_bytes: 930000000
+    precision: fp16
+    format: gguf
+    exclusive_group: llama-mmproj
+    required_for:
+    - qwen3.8-27b-q6-k-l
+    source:
+      type: huggingface
+      repo_id: bartowski/Qwen3.8-27B-GGUF
+      filename: mmproj-Qwen3.8-27B-f16.gguf
+      url: https://huggingface.co/bartowski/Qwen3.8-27B-GGUF/resolve/main/mmproj-Qwen3.8-27B-f16.gguf
+      mirror_url: https://hf-mirror.com/bartowski/Qwen3.8-27B-GGUF/resolve/main/mmproj-Qwen3.8-27B-f16.gguf
+    description: Qwen3.8-27B 多模态投影 f16（约 0.93GB，bartowski 公开仓库）
+  loras:
+    scan_dir: llm/loras/llama/
