@@ -1,6 +1,6 @@
 engine_id: llama_cpp_9cdb76f8
 engine_name: Llama.cpp
-engine_version: 0.2.1
+engine_version: 1.0.0
 aireliable_compat: '>=0.0.16'
 uv_env_name: llm-llama-cpp
 export_mode: source
@@ -21,8 +21,8 @@ source:
   type: github
   github_repo: ggerganov/llama.cpp
 upgrade:
-  check_url: https://api.github.com/repos/ggerganov/llama.cpp/releases/latest
-  auto_check: false
+  check_url: https://api.github.com/repos/AIJianGe/aireliable-engine-llama-cpp/releases/latest
+  auto_check: true
 node_packages: []
 env_config:
   requires_torch: false
