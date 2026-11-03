@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from aireliable_engine import EngineConfig as BaseEngineConfig
+
 logger = logging.getLogger(__name__)
 
 # v0.3.5+ 设备策略合法取值（平台注入 AIRELIABLE_DEVICE_POLICY 环境变量）
@@ -112,26 +114,18 @@ DEFAULT_CACHE_TYPE_V = "q4_0"                                # V 缓存量化
 
 
 @dataclass
-class EngineConfig:
+class EngineConfig(BaseEngineConfig):
     """引擎运行配置（v0.3.0 router mode 版）。
 
     通过环境变量 + 命令行参数构造。
     """
 
-    # ===== 基础 =====
+    # ===== 基础（身份 / 端口默认值由本引擎覆盖，其余公共字段见基类）=====
     engine_id: str = ENGINE_ID
     engine_name: str = ENGINE_NAME
     capability: str = CAPABILITY
     engine_type: str = ENGINE_TYPE
     port: int = DEFAULT_PORT
-    host: str = "127.0.0.1"
-
-    # ===== 路径 =====
-    models_root: Path = Path("models")               # 模型根目录（AIRELIABLE_MODELS_ROOT）
-    data_root: Path = Path("data")                   # 运行时数据根目录
-    project_root: Path = Path(".")                   # 项目根
-    # v0.2.5+ 输出文件根目录统一为 output（项目顶层目录）
-    output_root: Path = Path("output")               # 输出文件根目录（生成文本按类型分子目录）
 
     # ===== 推导路径 =====
     checkpoint_dir: Path = field(init=False)         # GGUF 模型目录（router mode 的 --models-dir）
@@ -195,12 +189,6 @@ class EngineConfig:
     #   auto    → 不干预（llama-server 默认 ngl=auto+fit=on，保守档，不再作平台默认）
     # v1.0+ 默认从 auto 改为 gpu（对齐 bat --n-gpu-layers 999 语义）
     device_policy: str = "gpu"
-
-    # ===== 平台 API（v0.3.0 新增）=====
-    core_url: Optional[str] = None                    # 平台 core URL（AIRELIABLE_CORE_URL）
-
-    # ===== 日志 =====
-    log_level: str = "INFO"
 
     def __post_init__(self) -> None:
         """推导子路径。"""

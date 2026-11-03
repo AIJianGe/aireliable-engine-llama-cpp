@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from aireliable_engine import decode_subprocess_output
+from aireliable_engine.device import probe as _sdk_probe
 
 from .config import EngineConfig
 
@@ -970,7 +971,7 @@ class LlamaProcessManager:
 
         优先级：
             1. config.gpu_vram_gb（用户显式指定，视为可用显存）
-            2. nvidia-smi 查询 memory.free
+            2. SDK 设备探测（有 core 走平台权威值，否则本地多源探测）
 
         Returns:
             float | None: 可用显存 GB；检测失败返回 None
@@ -979,27 +980,14 @@ class LlamaProcessManager:
         if self.config.gpu_vram_gb and self.config.gpu_vram_gb > 0:
             return float(self.config.gpu_vram_gb)
 
-        # nvidia-smi 查询（memory.free 返回 MB，转换为 GB）
+        # 任务 71：nvidia-smi 直调改为 SDK 探测（本引擎无 torch，走系统层）
         try:
-            out = subprocess.run(
-                ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                creationflags=_get_creation_flags(),
-            )
-            if out.returncode == 0:
-                for line in out.stdout.strip().splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        # nvidia-smi memory.free 单位是 MB（不含逗号时）
-                        return float(line) / 1024.0
-                    except ValueError:
-                        continue
+            raw = _sdk_probe(mode="auto")
+            free_mb = raw.get("vram_free_mb")
+            if free_mb is not None:
+                return float(free_mb) / 1024.0
         except Exception as e:
-            logger.debug("nvidia-smi 查询可用显存失败: %s", e)
+            logger.debug("SDK 显存探测失败: %s", e)
         return None
 
     def _suggest_ctx_by_vram(

@@ -30,30 +30,19 @@ v0.3.0 关键变更：
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
 from typing import Optional
 
 import json as _json
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     StreamingResponse,
 )
-from fastapi.staticfiles import StaticFiles
 
-from aireliable_engine import (
-    ErrorResponse,
-    HealthResponse,
-    LoadRequest,
-    LoraLoadRequest,
-    LoraUnloadRequest,
-    register_log_level_endpoint,
-    setup_engine_logging,
-)
+from aireliable_engine import LoadRequest, build_engine_app, run_engine_server
 
 from .config import EngineConfig, parse_args
 from .engine import LlamaCppEngine
@@ -288,66 +277,41 @@ def _setup_httpx_noise_filter() -> None:
     logger.debug("已设置 httpx 噪音过滤器（过滤 /v1/tasks/internal/ 的 INFO 请求日志）")
 
 
-# ===== Lifespan 生命周期管理 =====
+# ===== Lifespan 钩子（由 SDK build_engine_app 调用）=====
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """FastAPI 生命周期管理。
+async def _on_startup(engine: LlamaCppEngine) -> None:
+    """启动钩子：噪声过滤 → 绑定全局实例 → 异步刷新 variant 扫描。"""
+    global _engine
 
-    启动时初始化引擎（含异步模型扫描），关闭时清理资源（停止子进程）。
-    """
-    global _engine, _config
-
-    # 解析配置（如果尚未从命令行注入）
-    if _config is None:
-        _config = parse_args()
-
-    # 配置日志
-    setup_engine_logging(
-        engine_id=_config.engine_id,
-        log_level=_config.log_level,
-        log_dir=_config.log_dir,
-    )
-
-    # v0.3.1+ 设置自定义异常处理器：抑制 Windows asyncio ProactorEventLoop 噪声日志
-    # 过滤 _call_connection_lost + ConnectionResetError [WinError 10054] 组合
-    # 这是 Windows asyncio 已知缺陷，健康检查轮询时 socket 关闭触发，不影响功能
     _setup_asyncio_noise_filter()
-
-    # v0.4.x httpx 噪音过滤（SDK internal progress 上报的 INFO 请求日志）
     _setup_httpx_noise_filter()
 
-    logger.info("===== Llama.cpp 引擎启动（v0.3.1 router mode + 显存回收增强）=====")
-    logger.info("配置: %s", _config.to_dict())
-
-    # 初始化引擎
-    _engine = LlamaCppEngine(_config)
-
-    # v0.3.0：lifespan startup 阶段异步刷新扫描（平台 API 已就绪）
-    # __init__ 阶段的同步 _refresh_scan 只是 fallback，此处用平台 API 重新检测
-    await _engine._refresh_scan_async()
+    _engine = engine
+    await engine._refresh_scan_async()
     logger.info(
         "引擎实例化完成: state=%s, variants=%d",
-        _engine.state_machine.state.value,
-        len(_engine._available_variants),
+        engine.state_machine.state.value,
+        len(engine._available_variants),
     )
 
-    yield
 
-    # 关闭清理：停止子进程
-    logger.info("===== Llama.cpp 引擎关闭 =====")
-    if _engine is not None and _engine.process_manager.is_running:
-        try:
-            await _engine._unload_impl()
-        except Exception as e:
-            logger.warning("关闭时停止子进程失败: %s", e)
-    _engine = None
+async def _on_shutdown(engine: LlamaCppEngine) -> None:
+    """关闭钩子：停止 llama-server 子进程并清空全局引用。"""
+    global _engine, _config
+
+    try:
+        if engine.process_manager.is_running:
+            await engine._unload_impl()
+            logger.info("关闭时停止子进程成功")
+    finally:
+        _engine = None
+        _config = None
 
 
 # ===== 创建 FastAPI 应用 =====
 
 def create_app(config: EngineConfig | None = None) -> FastAPI:
-    """创建 FastAPI 应用。
+    """创建 FastAPI 应用（8 端点 / CORS / 日志端点由 SDK 骨架提供）。
 
     Args:
         config: 引擎配置（None 则从命令行解析）
@@ -356,30 +320,23 @@ def create_app(config: EngineConfig | None = None) -> FastAPI:
         FastAPI: 配置好的应用实例
     """
     global _config
-    if config is not None:
-        _config = config
 
-    app = FastAPI(
+    if config is None:
+        config = parse_args()
+    _config = config
+
+    app = build_engine_app(
+        LlamaCppEngine,
+        config=config,
         title="Llama.cpp Engine",
-        description=(
-            "AIReliable 平台的 Llama.cpp 引擎（v0.3.0 router mode + 反代自带 UI）"
-        ),
+        description="AIReliable 平台的 Llama.cpp 引擎（router mode + 反代自带 UI）",
         version="0.3.0",
-        lifespan=lifespan,
+        startup_hook=_on_startup,
+        shutdown_hook=_on_shutdown,
+        static_dirs={"/output": config.output_root},
+        redirect_root=None,  # 根路径交给反代（llama-server 自带 SvelteKit UI）
+        infer_request_cls=InferRequest,  # 强类型 inputs（InferInputs）
     )
-
-    # CORS（允许主控跨域调用，iframe 嵌入需要）
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],                  # v0.1 简化，生产环境应限制
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # ===== 注册 8 个标准端点 + /output 静态挂载 =====
-    _register_endpoints(app)
-    _mount_output_static(app)
 
     # ===== v0.3.3+ 反代拦截器：/models/load / /models/unload =====
     # 必须在 catch-all 反代之前注册，拦截 llama-server 的模型加载/卸载请求，
@@ -387,156 +344,10 @@ def create_app(config: EngineConfig | None = None) -> FastAPI:
     _register_proxy_interceptors(app)
 
     # ===== 反向代理 llama-server UI（必须最后挂载）=====
-    # 注意：反代路由使用 catch-all /{path:path}，会拦截未匹配的所有路径，
-    # 因此必须在 8 端点 + /output + 拦截器之后挂载，否则会拦截 /health /load 等关键端点
+    # catch-all /{path:path} 会拦截未匹配的所有路径，必须在 8 端点 + /output 之后
     _mount_llama_server_proxy(app)
 
     return app
-
-
-# ===== 8 端点注册 =====
-
-def _register_endpoints(app: FastAPI) -> None:
-    """注册 8 个标准 HTTP 端点。"""
-
-    # 1. /health
-    @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
-        """健康检查。"""
-        return await get_engine().health()
-
-    # 2. /capabilities
-    @app.get("/capabilities")
-    async def capabilities() -> dict:
-        """能力声明（可用 GGUF variant 列表）。
-
-        注意：手动序列化 variants 以保留 LlamaVariantInfo 扩展字段
-        （path / file_size / supports_mmproj / mmproj_path / alias），
-        避免 Pydantic 按基类 VariantInfo 序列化时丢弃子类字段。
-        """
-        resp = await get_engine().capabilities()
-        data = resp.model_dump()
-        data["variants"] = [v.model_dump() for v in resp.variants]
-        return data
-
-    # 3. /load
-    @app.post("/load")
-    async def load(request: LoadRequest) -> dict:
-        """启动 router mode 子进程（可选预加载 variant）。"""
-        try:
-            response = await get_engine().load(request)
-            return response.model_dump()
-        except FileNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except RuntimeError as e:
-            # 文件完整性校验失败 / 子进程启动失败
-            logger.exception("加载失败")
-            raise HTTPException(status_code=500, detail=str(e))
-        except Exception as e:
-            logger.exception("加载失败")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    # 4. /unload
-    @app.post("/unload")
-    async def unload() -> dict:
-        """停止子进程（释放所有模型显存）。"""
-        try:
-            response = await get_engine().unload()
-            return response.model_dump()
-        except Exception as e:
-            logger.exception("卸载失败")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    # 5. /infer（SSE 流式）
-    @app.post("/infer")
-    async def infer(request: InferRequest):
-        """推理（SSE 流式返回，字节流透传 llama-server OpenAI SSE）。
-
-        请求体参考 InferRequest schema：
-            - variant: 可选，若未加载则自动调 /models/load
-            - inputs.messages: OpenAI 兼容消息列表
-            - inputs.model: router mode 路由用的模型名（优先级高于 variant）
-            - inputs.max_tokens / temperature / top_p / stream / seed / stop
-            - task_id: 可选任务 ID
-        """
-        engine = get_engine()
-
-        # BaseEngine.infer 返回异步迭代器（SSE 帧）
-        sse_stream = engine.infer(request)
-
-        return StreamingResponse(
-            sse_stream,
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",          # Nginx 不缓冲
-            },
-        )
-
-    # 6. /status
-    @app.get("/status")
-    async def status() -> dict:
-        """引擎状态查询（含 router mode 多模型信息）。"""
-        return (await get_engine().status()).model_dump()
-
-    # 7. /lora/load（v0.1 返回 501）
-    @app.post("/lora/load")
-    async def lora_load(request: LoraLoadRequest) -> dict:
-        """加载 LoRA（v0.1 不支持）。"""
-        try:
-            response = await get_engine().load_lora(request)
-            return response.model_dump()
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.exception("LoRA 加载失败")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    # 8. /lora/unload（v0.1 返回 501）
-    @app.post("/lora/unload")
-    async def lora_unload(request: LoraUnloadRequest) -> dict:
-        """卸载 LoRA（v0.1 不支持）。"""
-        try:
-            response = await get_engine().unload_lora(request)
-            return response.model_dump()
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.exception("LoRA 卸载失败")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    # 错误处理
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException):
-        """HTTP 异常统一格式。"""
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=ErrorResponse(error={
-                "type": exc.__class__.__name__,
-                "message": str(exc.detail),
-                "code": exc.status_code,
-            }).model_dump(),
-        )
-
-    # v0.2.5+ T6.2：日志级别动态调整端点（GET /log_level + POST /log_level）
-    register_log_level_endpoint(app)
-
-
-# ===== /output 静态挂载 =====
-
-def _mount_output_static(app: FastAPI) -> None:
-    """挂载 /output/* 静态文件（文本产物下载）。"""
-    if _config is None:
-        return
-    app.mount(
-        "/output",
-        StaticFiles(directory=str(_config.output_root)),
-        name="output",
-    )
-    logger.info("输出目录挂载: /output -> %s", _config.output_root)
 
 
 # ===== 状态机恢复 + auto-load 公共 helper（v0.3.7+）=====
@@ -1196,34 +1007,11 @@ app: Optional[FastAPI] = None
 
 def main() -> None:
     """命令行启动入口。"""
-    global _config, app
+    global app
 
-    # 解析命令行参数
-    _config = parse_args()
-
-    # 配置日志（lifespan 也会配置，这里先配一遍让启动日志可见）
-    setup_engine_logging(
-        engine_id=_config.engine_id,
-        log_level=_config.log_level,
-        log_dir=_config.log_dir,
-    )
-
-    logger.info(
-        "启动 Llama.cpp 引擎 (v0.3.0 router mode): host=%s, port=%d",
-        _config.host, _config.port,
-    )
-
-    # 创建 app
-    app = create_app(_config)
-
-    # 用 uvicorn 启动
-    import uvicorn
-    uvicorn.run(
-        app,
-        host=_config.host,
-        port=_config.port,
-        log_level=_config.log_level.lower(),
-    )
+    config = parse_args()
+    app = create_app(config)
+    run_engine_server(app, config=config)
 
 
 if __name__ == "__main__":

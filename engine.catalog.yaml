@@ -1,0 +1,43 @@
+# 开源引擎中心展示元数据（任务 80 / T4.1）
+schema: 1
+engine_id: llama_cpp_9cdb76f8
+
+name:
+  zh: "Llama.cpp 本地大模型"
+  en: "Llama.cpp"
+
+description:
+  zh: "通用 GGUF 大模型运行引擎，支持 Qwen 系列等模型的本地推理与 OpenAI 兼容接口。"
+  en: "General-purpose GGUF inference engine for local LLM serving with an OpenAI-compatible API."
+
+category: llm
+tags:
+  - llm
+  - gguf
+  - llama-cpp
+
+repository:
+  github: AIJianGe/aireliable-engine-llama-cpp
+  gitee: AIJianGe/aireliable-engine-llama-cpp
+
+cover: catalog/covers/llama_cpp_9cdb76f8.webp
+
+requirements:
+  python: ">=3.10,<3.13"
+  gpu: optional
+
+license: PolyForm-Noncommercial-1.0.0
+
+description_long:
+  zh: |-
+    Llama.cpp 是平台的通用 GGUF 推理引擎，支持 Qwen 系列以及其他 GGUF 格式模型，全部在本机完成加载与推理，提示词与生成结果不出机器。
+
+    引擎对外提供 OpenAI 兼容接口，可直接接入平台的对话、续写与批量推理任务；支持按可用显存自动分配 GPU 层数（-ngl），显存不足时可回落到 GPU + CPU 混合推理。
+
+    它不依赖 PyTorch，安装体积小、启动快；GPU 为可选项，纯 CPU 也能运行，但吞吐与首字延迟与 GPU 差距明显。适合本地知识库问答、私有化对话与离线批量生成。
+  en: |-
+    Llama.cpp is the platform's general GGUF inference engine. It runs Qwen-family and other GGUF models entirely on the local machine, so prompts and outputs never leave the device.
+
+    It exposes an OpenAI-compatible API that plugs directly into the platform's chat, continuation and batch inference tasks, and assigns GPU layers automatically based on available VRAM (-ngl), falling back to GPU + CPU hybrid inference when memory is tight.
+
+    It does not depend on PyTorch, so installation is small and startup is fast. GPU is optional: pure CPU works, but throughput and time-to-first-token are markedly slower. Best suited to local RAG Q&A, private chat and offline batch generation.
